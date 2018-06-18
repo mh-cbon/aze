@@ -7,10 +7,11 @@ a proxy to reduce bandwidth.
 ```sh
 aze <dst> <src> <cap>
 
-rm rcv.data;netlisten -k 1 localhost:9090 - > rcv.data && pkill -u ${USER} aze &
-aze localhost:9090 localhost:9091 1M || rm rcv.data && pkill -u ${USER} watch &
-aze gen 12M "a" | nc --send-only localhost 9091 &
+rm rcv.data;netlisten -t 2s -k 1 localhost:9090 - > rcv.data && pkill -u ${USER} aze &
+aze -t 2s localhost:9090 localhost:9091 888K || rm rcv.data && pkill -u ${USER} watch &
+aze gen 6.66M "a" | nc --send-only localhost 9091 &
 watch -n 1 ls -lah rcv.data
+
 ```
 
 # install

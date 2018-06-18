@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
+	"github.com/juju/ratelimit"
 )
 
 var (
@@ -30,7 +31,7 @@ func main() {
 		timeout time.Duration
 	}{}
 
-	flag.DurationVar(&opts.timeout, "t", time.Second*2, "timeout of the conenction")
+	flag.DurationVar(&opts.timeout, "t", time.Second*60, "timeout of the conenction")
 	flag.BoolVar(&opts.quiet, "q", false, "stfu")
 
 	flag.Parse()
@@ -142,9 +143,9 @@ func main() {
 }
 
 func copy(src, dst net.Conn, capBytes uint64) error {
-	// bucket := ratelimit.NewBucketWithRate(float64(capBytes), int64(capBytes))
-	// n, err := io.Copy(ratelimit.Writer(dst, bucket), src)
-	n, err := io.Copy(dst, src)
+	bucket := ratelimit.NewBucketWithRate(float64(capBytes), int64(capBytes))
+	n, err := io.Copy(ratelimit.Writer(dst, bucket), src)
+	// n, err := io.Copy(dst, src)
 	if err != nil {
 		return fmt.Errorf("copy error %v", err)
 	}
@@ -166,14 +167,14 @@ type idleTimeoutConn struct {
 func (i idleTimeoutConn) Read(buf []byte) (n int, err error) {
 	i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	n, err = i.Conn.Read(buf)
-	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	// i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	return
 }
 
 func (i idleTimeoutConn) Write(buf []byte) (n int, err error) {
 	i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	n, err = i.Conn.Write(buf)
-	i.Conn.SetDeadline(time.Now().Add(i.timeout))
+	// i.Conn.SetDeadline(time.Now().Add(i.timeout))
 	return
 }
 
