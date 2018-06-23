@@ -207,9 +207,11 @@ func main() {
 				}
 				elapsed := time.Since(start)
 				copied := bytefmt.ByteSize(uint64(n))
-				speed := ""
-				if x := elapsed.Seconds(); x > 0 {
-					speed = bytefmt.ByteSize(uint64(n / int64(x)))
+				speed := "n/a"
+				if x := int64(elapsed.Seconds()); x > 0 {
+					speed = bytefmt.ByteSize(uint64(n/x)) + "/s"
+				} else if x := int64(elapsed.Nanoseconds()); x > 0 {
+					speed = bytefmt.ByteSize(uint64(n/x)) + "/µs"
 				}
 				log.Print("%v -> %v copied %v - %v - %v/s",
 					srcConn.RemoteAddr(), dstConn.RemoteAddr(),
