@@ -7,18 +7,21 @@ a proxy to reduce bandwidth.
 ```sh
 aze <dst> <src> <cap>
 
-GLOBALSPEED="10M" SPEED="250M" SIZE="250M" # it works, as long as you have enough ram to hold
- # (SPEED*1.2) + (SPEED*1.2) + (GLOBALSPEED*CONNLEN)
+GLOBALSPEED="50M" SPEED="250M" SIZE="100M" # it works, as long as you have enough ram to hold
+ # (SPEED*1.2) + (SIZE*1.2) + (GLOBALSPEED*CONNLEN)
 netlisten -monitor :9079 -k 2 localhost:9090 - "${SPEED}" > /dev/null && pkill -u ${USER} aze &
 aze -g -monitor :9080 localhost:9090 localhost:9091 "${GLOBALSPEED}" &
-aze -monitor :9081 gen "${SIZE}" "abcdefghijk" "${SPEED}" | nc --send-only localhost 9091 &
-aze -monitor :9082 gen "${SIZE}" "abcdefghijk" "${SPEED}" | nc --send-only localhost 9091 &
+aze -monitor :9081 gen "${SIZE}" "a" "${SPEED}" | nc --send-only localhost 9091 &
+aze -monitor :9082 gen "${SIZE}" "a" "${SPEED}" | nc --send-only localhost 9091 &
 
 2018/06/23 13:05:52 [netlisten :9079] 127.0.0.1:9090 accepted 127.0.0.1:33736
 2018/06/23 13:05:52 [netlisten :9079] 127.0.0.1:9090 accepted 127.0.0.1:33744
-2018/06/23 13:06:51 [netlisten :9079] 127.0.0.1:33736 -> - copied 300M - 58.590601168s - 5.2M/s
-2018/06/23 13:06:51 [aze :9080] 127.0.0.1:38634 -> 127.0.0.1:9090 copied 300M - 59.001753663s - 5.1M/s
-2018/06/23 13:06:51 [netlisten :9079] 127.0.0.1:33744 -> - copied 300M - 59.001499202s - 5.1M/s
+2018/06/23 13:19:14 [aze gen :9082] written 200M
+2018/06/23 13:19:15 [aze :9080] 127.0.0.1:46584 -> 127.0.0.1:9090 copied 200M - 8.726957667s - 25M/s
+2018/06/23 13:19:15 [netlisten :9079] 127.0.0.1:41694 -> - copied 200M - 8.727028177s - 25M/s
+2018/06/23 13:19:16 [aze gen :9081] written 200M
+2018/06/23 13:19:16 [aze :9080] 127.0.0.1:46576 -> 127.0.0.1:9090 copied 200M - 10.171754951s - 20M/s
+2018/06/23 13:19:16 [netlisten :9079] 127.0.0.1:41686 -> - copied 200M - 10.171575107s - 20M/s
 
 expvarmon -i 500ms -ports ":9081"
 expvarmon -i 500ms -ports ":9082"

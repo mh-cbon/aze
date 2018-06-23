@@ -89,10 +89,21 @@ func main() {
 				blockSample = append(blockSample, sample...)
 			}
 			blockSampleLen := int64(len(blockSample))
-			// b := bufio.NewWriterSize(os.Stdout, int(speed))
+			n := 0
 			for i = 0; i < size; i += blockSampleLen {
-				os.Stdout.Write(blockSample)
+				var y int
+				var err error
+				if i+blockSampleLen > size {
+					y, err = os.Stdout.Write(blockSample[:(i+blockSampleLen)-size])
+				} else {
+					y, err = os.Stdout.Write(blockSample)
+				}
+				if err != nil {
+					log.Fatal("write error %v", err)
+				}
+				n += y
 			}
+			log.Print("written %v", bytefmt.ByteSize(uint64(n)))
 			return
 		}
 	}
