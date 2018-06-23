@@ -1,13 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	_ "expvar"
 	"flag"
 	"fmt"
 	"io"
 	stdlog "log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"regexp"
@@ -16,49 +17,82 @@ import (
 
 	"code.cloudfoundry.org/bytefmt"
 	"github.com/juju/ratelimit"
+	"github.com/oxtoacart/bpool"
 )
 
 var (
-	log = logAPI{}
+	log = logAPI{prefix: "[aze] "}
 )
 
 func main() {
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var opts = struct {
 		quiet   bool
 		timeout time.Duration
+		monitor string
+		global  bool
 	}{}
 
 	flag.DurationVar(&opts.timeout, "t", time.Second*60, "timeout of the conenction")
 	flag.BoolVar(&opts.quiet, "q", false, "stfu")
+	flag.BoolVar(&opts.global, "g", false, "global rate limiting")
+	flag.StringVar(&opts.monitor, "monitor", ":", "http monitor address")
 
 	flag.Parse()
+
+	go func() {
+		if err := http.ListenAndServe(opts.monitor, nil); err != nil {
+			log.Fatal("monitoring server could not listen, err=%v", err)
+		}
+	}()
 
 	log.SetQuiet(opts.quiet)
 
 	// parse <dst> <src> <cap>
 	args := flag.Args()
+	delta := 1.2
+
+	log.prefix = fmt.Sprintf("[aze %v] ", opts.monitor)
 
 	{
-		if len(args) == 3 && args[0] == "gen" {
-			var cnt uint64
+		if args[0] == "gen" {
+			log.prefix = fmt.Sprintf("[aze gen %v] ", opts.monitor)
+			if len(args) < 3 {
+				log.Fatal("invalid command line, expected aze gen <size> <sample> <cap>")
+			}
+			var size int64
 			{
 				c, err := bytefmt.ToBytes(args[1])
 				if err != nil {
 					log.Fatal("failed to parse %q, err=%v", args[1], err)
 				}
-				cnt = c
+				size = int64(c)
 			}
-			sampleStr := args[2]
-			sampleLen := uint64(len(sampleStr))
-			sample := bytes.Repeat([]byte(sampleStr), len(sampleStr))
-			var i uint64
-			for i = 0; i < cnt; i += sampleLen {
-				os.Stdout.Write(sample)
+
+			speed := int64(1024 * 5)
+			if len(args) > 3 {
+				c, err := bytefmt.ToBytes(args[3])
+				if err != nil {
+					log.Fatal("failed to parse %q, err=%v", args[1], err)
+				}
+				speed = int64(float64(c) * delta)
 			}
-			log.Print("copied %v", bytefmt.ByteSize(i))
+
+			var i int64
+			sampleLen := int64(len(args[2]))
+			sample := []byte(args[2])
+			blockSample := make([]byte, 0, int(float64(speed)*delta))
+			for i = 0; i < speed; i += sampleLen {
+				blockSample = append(blockSample, sample...)
+			}
+			blockSampleLen := int64(len(blockSample))
+			// b := bufio.NewWriterSize(os.Stdout, int(speed))
+			for i = 0; i < size; i += blockSampleLen {
+				os.Stdout.Write(blockSample)
+			}
 			return
 		}
 	}
@@ -75,9 +109,14 @@ func main() {
 	{
 		b, err := bytefmt.ToBytes(cap)
 		if err != nil {
-			log.Fatal("faield to parse capacity %q, err=%v", cap, err)
+			log.Fatal("failed to parse capacity %q, err=%v", cap, err)
 		}
 		capBytes = b
+	}
+
+	var globalLimiter *ratelimit.Bucket
+	if opts.global {
+		globalLimiter = ratelimit.NewBucketWithRate(float64(capBytes), int64(float64(capBytes)*delta))
 	}
 
 	dstProto := "tcp"
@@ -103,13 +142,14 @@ func main() {
 	}
 
 	go func() {
+		bufpool := bpool.NewBytePool(48, int(float64(capBytes)*delta))
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
 			}
-			var src net.Conn
+			var srcConn net.Conn
 			{
 				c, err := l.Accept()
 				if err != nil {
@@ -117,10 +157,10 @@ func main() {
 					continue
 				}
 				defer c.Close()
-				src = &idleTimeoutConn{Conn: c, timeout: opts.timeout}
+				srcConn = &idleTimeoutConn{Conn: c, timeout: opts.timeout}
 			}
-			go func() {
-				var dst net.Conn
+			go func(srcConn net.Conn) {
+				var dstConn net.Conn
 				{
 					d, err := net.Dial(dstProto, dstAddr)
 					if err != nil {
@@ -128,29 +168,49 @@ func main() {
 						return
 					}
 					defer d.Close()
-					dst = &idleTimeoutConn{Conn: d, timeout: opts.timeout}
+					dstConn = &idleTimeoutConn{Conn: d, timeout: opts.timeout}
 				}
-				if err := copy(src, dst, capBytes); err != nil {
-					log.Error("failed to handle %v", err)
+
+				var dst io.Writer = dstConn
+				var src io.Reader = srcConn
+				{
+
+					bucket := globalLimiter
+					if !opts.global {
+						bucket = ratelimit.NewBucketWithRate(float64(capBytes), int64(capBytes*2))
+					}
+
+					dst = ratelimit.Writer(dst, bucket)
+					// src = ratelimit.Reader(src, bucket)
 				}
-			}()
+
+				start := time.Now()
+				buf := bufpool.Get()
+				defer bufpool.Put(buf)
+				n, err := io.CopyBuffer(dst, src, buf)
+				if err != nil {
+					log.Print("[ERR] %v -> %v %v",
+						srcConn.RemoteAddr(), dstConn.RemoteAddr(), err,
+					)
+					return
+				}
+				elapsed := time.Since(start)
+				copied := bytefmt.ByteSize(uint64(n))
+				speed := ""
+				if x := elapsed.Seconds(); x > 0 {
+					speed = bytefmt.ByteSize(uint64(n / int64(x)))
+				}
+				log.Print("%v -> %v copied %v - %v - %v/s",
+					srcConn.RemoteAddr(), dstConn.RemoteAddr(),
+					copied, elapsed, speed,
+				)
+			}(srcConn)
 		}
 	}()
 
 	<-cancelNotifier()
 	cancel()
 
-}
-
-func copy(src, dst net.Conn, capBytes uint64) error {
-	bucket := ratelimit.NewBucketWithRate(float64(capBytes), int64(capBytes))
-	n, err := io.Copy(ratelimit.Writer(dst, bucket), src)
-	// n, err := io.Copy(dst, src)
-	if err != nil {
-		return fmt.Errorf("copy error %v", err)
-	}
-	log.Print("%v -> %v copied %v bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
-	return nil
 }
 
 func cancelNotifier() chan os.Signal {
@@ -179,7 +239,8 @@ func (i idleTimeoutConn) Write(buf []byte) (n int, err error) {
 }
 
 type logAPI struct {
-	stfu bool
+	stfu   bool
+	prefix string
 }
 
 func (l *logAPI) SetQuiet(stfu bool) {
@@ -191,24 +252,24 @@ func (l logAPI) Print(f string, args ...interface{}) {
 		return
 	}
 	if len(args) == 0 {
-		stdlog.Print(f + "\n")
+		stdlog.Print(l.prefix + f + "\n")
 	} else {
-		stdlog.Printf(f+"\n", args...)
+		stdlog.Printf(l.prefix+f+"\n", args...)
 	}
 }
 
 func (l logAPI) Fatal(f string, args ...interface{}) {
 	if len(args) == 0 {
-		stdlog.Fatalf(f + "\n")
+		stdlog.Fatalf(l.prefix + f + "\n")
 	} else {
-		stdlog.Fatalf(f+"\n", args...)
+		stdlog.Fatalf(l.prefix+f+"\n", args...)
 	}
 }
 
 func (l logAPI) Error(f string, args ...interface{}) {
 	if len(args) == 0 {
-		stdlog.Print(f + "\n")
+		stdlog.Print(l.prefix + f + "\n")
 	} else {
-		stdlog.Printf(f+"\n", args...)
+		stdlog.Printf(l.prefix+f+"\n", args...)
 	}
 }
