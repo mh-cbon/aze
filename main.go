@@ -93,8 +93,8 @@ func main() {
 			for i = 0; i < size; i += blockSampleLen {
 				var y int
 				var err error
-				if i+blockSampleLen > size {
-					y, err = os.Stdout.Write(blockSample[:(i+blockSampleLen)-size])
+				if blockSampleLen > size {
+					y, err = os.Stdout.Write(blockSample[:size])
 				} else {
 					y, err = os.Stdout.Write(blockSample)
 				}
