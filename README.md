@@ -8,7 +8,7 @@ a proxy to reduce bandwidth.
 aze <dst> <src> <cap>
 
 GLOBALSPEED="250M" SPEED="250M" SIZE="2500M"
-netlisten -monitor :9079 -k 2 localhost:9090 - "${SPEED}" > /dev/null && pkill -u ${USER} aze &
+netlisten -monitor :9079 -k 2 localhost:9090 to - "${SPEED}" > /dev/null && pkill -u ${USER} aze &
 aze -g -monitor :9080 localhost:9090 localhost:9091 "${GLOBALSPEED}" &
 aze -monitor :9081 gen "${SIZE}" "abcdefghijk" "${SPEED}" | nc --send-only localhost 9091 &
 aze -monitor :9082 gen "${SIZE}" "abcdefghijk" "${SPEED}" | nc --send-only localhost 9091 &
